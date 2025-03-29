@@ -14,11 +14,11 @@
 // -------------------------------
 let polygons = [];  // 完成した多角形（各 poly は { points: [...], isClosed: true }）
 let currentPolygon = { points: [], isClosed: false };
-
-// 現在のモード ("draw", "edit", "delete")
+let texts = [];     // テキストオブジェクトの配列
+// 現在のモード ("draw", "edit", "delete", "text")
 let currentMode = "draw";
 
-// 編集時のドラッグ状態
+// 編集時のドラッグ状態（ポリゴン編集）
 let draggingVertex = false;
 let currentDragPolyIndex = null; // 完成済み: 0～polygons.length-1, 未完成: "current"
 let currentDragVertexIndex = null;
@@ -30,8 +30,10 @@ let polygonDragStart = null;
 let initialPolygonPoints = [];    // 選択された多角形の各頂点の初期座標
 let initialEdgeControls = [];     // 各頂点の edgeControl 初期値
 
-// 現在選択中の多角形（"current" またはインデックス）
+// 選択中のオブジェクト（ポリゴンかテキスト）
+// ポリゴンが選択中の場合は selectedPolygonIndex に数値が入り、テキストの場合は selectedTextIndex に数値が入る
 let selectedPolygonIndex = null;
+let selectedTextIndex = null;
 
 let updateScheduled = false;
 
@@ -54,8 +56,10 @@ const canvas = document.getElementById("drawingArea");
 const ctx = canvas.getContext("2d");
 const modeDrawRadio = document.getElementById("modeDraw");
 const modeEditRadio = document.getElementById("modeEdit");
-// 消去モード用ラジオボタン（index.html に追加）
+// 新規追加：消去モード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeDelete" value="delete"> を追加）
 const modeDeleteRadio = document.getElementById("modeDelete");
+// 新規追加：テキストモード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeText" value="text"> を追加）
+const modeTextRadio = document.getElementById("modeText");
 
 const showEdgeLengthCheckbox = document.getElementById("showEdgeLength");
 const showAngleCheckbox = document.getElementById("showAngle");
@@ -64,9 +68,9 @@ const clearBtn = document.getElementById("clearBtn");
 const polyPropertiesDiv = document.getElementById("polyProperties");
 // グリッド表示チェックボックス
 const showGridCheckbox = document.getElementById("showGrid");
-// グリッドスナップチェックボックス（index.html に追加）
+// グリッドスナップチェックボックス（index.html に <input type="checkbox" id="snapGrid"> を追加）
 const snapGridCheckbox = document.getElementById("snapGrid");
-// undo/redo ボタン（index.html に追加）
+// undo/redo ボタン（index.html に <button id="undoBtn">Undo</button> と <button id="redoBtn">Redo</button> を追加）
 const undoBtn = document.getElementById("undoBtn");
 const redoBtn = document.getElementById("redoBtn");
 
@@ -102,7 +106,8 @@ function createLabelRange(labelText, initialValue, min, max, step, onChange) {
 function saveState() {
   const state = {
     polygons: JSON.parse(JSON.stringify(polygons)),
-    currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
+    currentPolygon: JSON.parse(JSON.stringify(currentPolygon)),
+    texts: JSON.parse(JSON.stringify(texts))
   };
   undoStack.push(state);
   redoStack = [];
@@ -111,6 +116,7 @@ function saveState() {
 function restoreState(state) {
   polygons = JSON.parse(JSON.stringify(state.polygons));
   currentPolygon = JSON.parse(JSON.stringify(state.currentPolygon));
+  texts = JSON.parse(JSON.stringify(state.texts));
   updateDrawing();
 }
 
@@ -118,7 +124,8 @@ function undo() {
   if (undoStack.length > 0) {
     const currentState = {
       polygons: JSON.parse(JSON.stringify(polygons)),
-      currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
+      currentPolygon: JSON.parse(JSON.stringify(currentPolygon)),
+      texts: JSON.parse(JSON.stringify(texts))
     };
     redoStack.push(currentState);
     const prevState = undoStack.pop();
@@ -130,7 +137,8 @@ function redo() {
   if (redoStack.length > 0) {
     const currentState = {
       polygons: JSON.parse(JSON.stringify(polygons)),
-      currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
+      currentPolygon: JSON.parse(JSON.stringify(currentPolygon)),
+      texts: JSON.parse(JSON.stringify(texts))
     };
     undoStack.push(currentState);
     const nextState = redoStack.pop();
@@ -245,6 +253,7 @@ modeDrawRadio.addEventListener("change", function() {
   if (modeDrawRadio.checked) {
     currentMode = "draw";
     selectedPolygonIndex = null;
+    selectedTextIndex = null;
     updateDrawing();
   }
 });
@@ -262,6 +271,16 @@ if (modeDeleteRadio) {
     }
   });
 }
+if (modeTextRadio) {
+  modeTextRadio.addEventListener("change", function() {
+    if (modeTextRadio.checked) {
+      currentMode = "text";
+      selectedPolygonIndex = null;
+      selectedTextIndex = null;
+      updateDrawing();
+    }
+  });
+}
 
 if (undoBtn) { undoBtn.addEventListener("click", undo); }
 if (redoBtn) { redoBtn.addEventListener("click", redo); }
@@ -273,6 +292,21 @@ function handleCanvasDown(e) {
     pos = snapToGrid(pos);
   }
   
+  // テキストモードの場合：クリック位置に新規テキストを配置
+  if (currentMode === "text") {
+    saveState();
+    texts.push({
+      x: pos.x,
+      y: pos.y,
+      content: "テキスト",
+      fontSize: 16,
+      color: "black"
+    });
+    updateDrawing();
+    return;
+  }
+  
+  // 消去モードの場合：クリック位置の最前面のポリゴンを削除
   if (currentMode === "delete") {
     for (let p = polygons.length - 1; p >= 0; p--) {
       if (pointInPolygon(pos, polygons[p].points)) {
@@ -299,7 +333,6 @@ function handleCanvasDown(e) {
         labelColor: "black", 
         labelOverride: "",
         bezierGap: 0.1,
-        // 新規追加：ラベル位置・文字サイズ（エッジ）
         labelOffsetX: 0,
         labelOffsetY: 0,
         labelFontSize: 12
@@ -309,7 +342,6 @@ function handleCanvasDown(e) {
         radius: 30, 
         labelOverride: "",
         fanPosition: 0,
-        // 新規追加：ラベル位置・文字サイズ（角）
         labelOffsetX: 0,
         labelOffsetY: 0,
         labelFontSize: 12
@@ -318,6 +350,7 @@ function handleCanvasDown(e) {
     updateDrawing();
   } else if (currentMode === "edit") {
     const threshold = 8;
+    // まず、ポリゴンの頂点・エッジの選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       const edgeCount = poly.points.length > 0 ? (poly.isClosed ? poly.points.length : poly.points.length - 1) : 0;
@@ -330,6 +363,7 @@ function handleCanvasDown(e) {
           currentEdgeControlPolyIndex = p;
           currentEdgeControlIndex = i;
           selectedPolygonIndex = p;
+          selectedTextIndex = null;
           return;
         }
       }
@@ -345,6 +379,7 @@ function handleCanvasDown(e) {
           currentEdgeControlPolyIndex = "current";
           currentEdgeControlIndex = i;
           selectedPolygonIndex = "current";
+          selectedTextIndex = null;
           return;
         }
       }
@@ -359,6 +394,7 @@ function handleCanvasDown(e) {
           currentDragPolyIndex = p;
           currentDragVertexIndex = i;
           selectedPolygonIndex = p;
+          selectedTextIndex = null;
           return;
         }
       }
@@ -372,38 +408,44 @@ function handleCanvasDown(e) {
           currentDragPolyIndex = "current";
           currentDragVertexIndex = i;
           selectedPolygonIndex = "current";
+          selectedTextIndex = null;
           return;
         }
       }
     }
+    // ポリゴン内部選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       if (pointInPolygon(pos, poly.points)) {
         draggingPolygon = true;
         currentDragPolyIndex = p;
         selectedPolygonIndex = p;
+        selectedTextIndex = null;
         polygonDragStart = pos;
         initialPolygonPoints = poly.points.map(pt => ({ x: pt.x, y: pt.y }));
         initialEdgeControls = poly.points.map(pt => pt.edgeControl ? { x: pt.edgeControl.x, y: pt.edgeControl.y } : null);
         return;
       }
     }
-    if (currentPolygon.points.length > 0) {
-      const xs = currentPolygon.points.map(pt => pt.x);
-      const ys = currentPolygon.points.map(pt => pt.y);
-      const minX = Math.min(...xs), maxX = Math.max(...xs);
-      const minY = Math.min(...ys), maxY = Math.max(...ys);
-      if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
-        draggingPolygon = true;
-        currentDragPolyIndex = "current";
-        selectedPolygonIndex = "current";
-        polygonDragStart = pos;
-        initialPolygonPoints = currentPolygon.points.map(pt => ({ x: pt.x, y: pt.y }));
-        initialEdgeControls = currentPolygon.points.map(pt => pt.edgeControl ? { x: pt.edgeControl.x, y: pt.edgeControl.y } : null);
+    // もしポリゴンが選択されなかった場合、テキストオブジェクトの選択を試みる
+    for (let i = texts.length - 1; i >= 0; i--) {
+      let t = texts[i];
+      ctx.save();
+      ctx.font = (t.fontSize || 16) + "px sans-serif";
+      let metrics = ctx.measureText(t.content);
+      let width = metrics.width;
+      let height = t.fontSize;
+      ctx.restore();
+      if (pos.x >= t.x - width/2 && pos.x <= t.x + width/2 &&
+          pos.y >= t.y - height/2 && pos.y <= t.y + height/2) {
+        selectedTextIndex = i;
+        selectedPolygonIndex = null;
+        updateDrawing();
         return;
       }
     }
     selectedPolygonIndex = null;
+    selectedTextIndex = null;
   }
 }
 canvas.addEventListener("mousedown", handleCanvasDown);
@@ -462,7 +504,7 @@ function handleCanvasMove(e) {
     stateChanged = true;
     scheduleUpdate();
   }
-  else if (currentMode === "draw") {
+  else if (currentMode === "draw" || currentMode === "text") {
     currentMousePos = pos;
     scheduleUpdate();
   }
@@ -491,7 +533,9 @@ clearBtn.addEventListener("click", function() {
   saveState();
   polygons = [];
   currentPolygon = { points: [], isClosed: false };
+  texts = [];
   selectedPolygonIndex = null;
+  selectedTextIndex = null;
   updateDrawing();
 });
 closePolygonBtn.addEventListener("click", function() {
@@ -543,6 +587,7 @@ function updateDrawing() {
   if (showGridCheckbox.checked) {
     drawGrid();
   }
+  // ポリゴン描画
   polygons.forEach(poly => {
     if (poly.points.length > 1) {
       const segCount = poly.isClosed ? poly.points.length : poly.points.length - 1;
@@ -591,6 +636,23 @@ function updateDrawing() {
       }
     }
   });
+  // テキストオブジェクト描画
+  texts.forEach((t, index) => {
+    ctx.fillStyle = t.color;
+    ctx.font = t.fontSize + "px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(t.content, t.x, t.y);
+    if (selectedTextIndex === index) {
+      let metrics = ctx.measureText(t.content);
+      let width = metrics.width;
+      let height = t.fontSize;
+      ctx.strokeStyle = "blue";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(t.x - width/2, t.y - height/2, width, height);
+    }
+  });
+  // 未完成のポリゴン（描画中）
   if (currentPolygon.points.length > 0) {
     if (currentPolygon.points.length > 1) {
       const segCount = currentPolygon.points.length - 1;
@@ -665,7 +727,6 @@ function drawEdgeLengthBezier(p1, p2, cp) {
   const derivative = { x: pt2.x - pt1.x, y: pt2.y - pt1.y };
   const norm = Math.sqrt(derivative.x*derivative.x + derivative.y*derivative.y);
   const normal = { x: -derivative.y/norm, y: derivative.x/norm };
-  // もともとのオフセットと固定シフトに加え、edgeProperty.labelOffsetX/Yを反映
   const baseOffset = 5;
   const verticalShift = -10;
   const xAdj = p1.edgeProperty.labelOffsetX || 0;
@@ -745,7 +806,6 @@ function drawAngleFan(pPrev, p, pNext, radius) {
   ctx.strokeStyle = "red";
   ctx.lineWidth = 1;
   ctx.stroke();
-  // テキスト位置：もともとの位置に加え、angleProperty.labelOffsetX/Yを反映
   const baseX = p.x + (radius+10)*Math.cos(center);
   const baseY = p.y + (radius+10)*Math.sin(center);
   const xAdj = p.angleProperty.labelOffsetX || 0;
@@ -795,10 +855,99 @@ function duplicatePolygon(poly) {
 // -------------------------------
 function updatePropertyPanel() {
   polyPropertiesDiv.innerHTML = "";
-  if (currentMode !== "edit" || selectedPolygonIndex === null) {
-    polyPropertiesDiv.innerHTML = "<p>ポリゴンが選択されていません</p>";
+  // 編集モード時、選択されているオブジェクトがあれば表示
+  if (currentMode !== "edit" || (selectedPolygonIndex === null && selectedTextIndex === null)) {
+    polyPropertiesDiv.innerHTML = "<p>オブジェクトが選択されていません</p>";
     return;
   }
+  // テキストオブジェクトが選択されている場合
+  if (selectedTextIndex !== null) {
+    let tObj = texts[selectedTextIndex];
+    let container = document.createElement("div");
+    container.className = "textProperties";
+    let header = document.createElement("h3");
+    header.textContent = "テキストオブジェクト";
+    container.appendChild(header);
+    let dupBtn = document.createElement("button");
+    dupBtn.textContent = "複製";
+    dupBtn.addEventListener("click", function() {
+      let newText = JSON.parse(JSON.stringify(tObj));
+      texts.push(newText);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(dupBtn);
+    
+    let contentLabel = document.createElement("label");
+    contentLabel.textContent = "内容: ";
+    let contentInput = document.createElement("input");
+    contentInput.type = "text";
+    contentInput.value = tObj.content;
+    contentInput.addEventListener("change", function() {
+      tObj.content = contentInput.value;
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(contentLabel);
+    container.appendChild(contentInput);
+    
+    let xLabel = document.createElement("label");
+    xLabel.textContent = " X: ";
+    let xInput = document.createElement("input");
+    xInput.type = "number";
+    xInput.value = tObj.x;
+    xInput.addEventListener("change", function() {
+      tObj.x = parseFloat(xInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(xLabel);
+    container.appendChild(xInput);
+    
+    let yLabel = document.createElement("label");
+    yLabel.textContent = " Y: ";
+    let yInput = document.createElement("input");
+    yInput.type = "number";
+    yInput.value = tObj.y;
+    yInput.addEventListener("change", function() {
+      tObj.y = parseFloat(yInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(yLabel);
+    container.appendChild(yInput);
+    
+    let fsLabel = document.createElement("label");
+    fsLabel.textContent = " 文字サイズ: ";
+    let fsInput = document.createElement("input");
+    fsInput.type = "number";
+    fsInput.value = tObj.fontSize;
+    fsInput.addEventListener("change", function() {
+      tObj.fontSize = parseFloat(fsInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(fsLabel);
+    container.appendChild(fsInput);
+    
+    let colorLabel = document.createElement("label");
+    colorLabel.textContent = " 色: ";
+    let colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = tObj.color;
+    colorInput.addEventListener("input", function() {
+      tObj.color = colorInput.value;
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(colorLabel);
+    container.appendChild(colorInput);
+    
+    polyPropertiesDiv.appendChild(container);
+    return;
+  }
+  
+  // ポリゴンオブジェクトが選択されている場合
   let poly, headerText;
   if (selectedPolygonIndex === "current") {
     poly = currentPolygon;
@@ -896,7 +1045,6 @@ function updatePropertyPanel() {
     });
     container.appendChild(gapRangeElem);
     
-    // 追加：ラベル位置X, Y, 文字サイズ（エッジ）
     const offsetXInput = document.createElement("input");
     offsetXInput.type = "number";
     offsetXInput.value = poly.points[i].edgeProperty.labelOffsetX || 0;
@@ -1002,7 +1150,6 @@ function updatePropertyPanel() {
     container.appendChild(document.createTextNode(" 表示ラベル: "));
     container.appendChild(angleTextInput);
     
-    // 追加：角ラベルの位置・文字サイズ
     const angleOffsetXInput = document.createElement("input");
     angleOffsetXInput.type = "number";
     angleOffsetXInput.value = poly.points[i].angleProperty.labelOffsetX || 0;
