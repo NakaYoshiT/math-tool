@@ -562,7 +562,7 @@ function drawEdgeLengthBezier(p1, p2, cp) {
   const norm = Math.sqrt(derivative.x*derivative.x + derivative.y*derivative.y);
   const normal = { x: -derivative.y/norm, y: derivative.x/norm };
   const offset = 5;
-  // 現在は中点に沿ったオフセットに加え、固定で上方向へ10px上げる（canvas座標系で y 減少）
+  // 中心位置に沿ったオフセットに加え、上方向に10px移動
   const textPos = { 
     x: mid.x + normal.x * offset, 
     y: mid.y + normal.y * offset - 10 
@@ -570,7 +570,6 @@ function drawEdgeLengthBezier(p1, p2, cp) {
   ctx.fillStyle = p1.edgeProperty.labelColor;
   ctx.font = "12px sans-serif";
   ctx.textAlign = "center";
-  // 中央寄せにしておく
   ctx.textBaseline = "middle";
   const label = p1.edgeProperty.labelOverride.trim() !== "" ? p1.edgeProperty.labelOverride : len.toFixed(1);
   ctx.fillText(label, textPos.x, textPos.y);
@@ -669,6 +668,15 @@ function drawEdgeControl(cp) {
 }
 
 // -------------------------------
+// ポリゴン複製機能（ディープコピーして polygons に追加）
+function duplicatePolygon(poly) {
+  const newPoly = JSON.parse(JSON.stringify(poly));
+  // 複製したポリゴンはそのまま完成済みとして扱う
+  polygons.push(newPoly);
+  updateDrawing();
+}
+
+// -------------------------------
 // プロパティパネル更新処理
 // -------------------------------
 function updatePropertyPanel() {
@@ -690,6 +698,16 @@ function updatePropertyPanel() {
   const header = document.createElement("h3");
   header.textContent = headerText;
   polyContainer.appendChild(header);
+  
+  // 複製ボタン（完成済みの場合のみ）
+  if (selectedPolygonIndex !== "current") {
+    const duplicateBtn = document.createElement("button");
+    duplicateBtn.textContent = "複製";
+    duplicateBtn.addEventListener("click", function() {
+      duplicatePolygon(poly);
+    });
+    polyContainer.appendChild(duplicateBtn);
+  }
   
   // 辺のプロパティ
   const edgeHeader = document.createElement("div");
