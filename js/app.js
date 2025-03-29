@@ -37,8 +37,8 @@ let currentDragTextIndex = null;
 let textDragStart = null;
 let initialTextPos = null;
 
-// 編集モード時、選択中のオブジェクト（ポリゴン or テキスト）
-// ポリゴン選択の場合は selectedPolygonIndex に数値、テキスト選択の場合は selectedTextIndex に数値が入る
+// 選択中のオブジェクト（ポリゴンまたはテキスト）
+// ポリゴンが選択中の場合は selectedPolygonIndex に数値が入り、テキストの場合は selectedTextIndex に数値が入る
 let selectedPolygonIndex = null;
 let selectedTextIndex = null;
 
@@ -55,14 +55,6 @@ let undoStack = [];
 let redoStack = [];
 // ドラッグ操作等で変更があったかのフラグ
 let stateChanged = false;
-
-// -------------------------------
-// 新規追加：スケール操作用変数（編集モードで選択したポリゴンの大きさだけ変更）
-let draggingScale = false;
-let scaleStartPos = null;
-let scaleCentroid = null;
-let scaleInitialPoints = null;
-let initialScaleDistance = 0;
 
 // -------------------------------
 // HTML要素
@@ -262,30 +254,6 @@ function drawGrid() {
 }
 
 // -------------------------------
-// 編集モード：ポリゴン拡大縮小用スケールハンドル描画
-// -------------------------------
-function drawScaleHandle(poly) {
-  // 重心（centroid）の計算
-  let sumX = 0, sumY = 0;
-  poly.points.forEach(pt => {
-    sumX += pt.x;
-    sumY += pt.y;
-  });
-  let centroid = { x: sumX / poly.points.length, y: sumY / poly.points.length };
-  // バウンディングボックスの右下隅を算出
-  let xs = poly.points.map(pt => pt.x);
-  let ys = poly.points.map(pt => pt.y);
-  let maxX = Math.max(...xs);
-  let maxY = Math.max(...ys);
-  let handleSize = 10; // ハンドルサイズ
-  ctx.save();
-  ctx.fillStyle = "rgba(0,0,255,0.5)";
-  ctx.fillRect(maxX - handleSize/2, maxY - handleSize/2, handleSize, handleSize);
-  ctx.restore();
-  return { x: maxX, y: maxY, size: handleSize, centroid: centroid };
-}
-
-// -------------------------------
 // イベントハンドラー
 // -------------------------------
 modeDrawRadio.addEventListener("change", function() {
@@ -355,6 +323,7 @@ function handleCanvasDown(e) {
         return;
       }
     }
+    // テキストは、文字列のバウンディングボックスを基に削除
     for (let i = texts.length - 1; i >= 0; i--) {
       let tObj = texts[i];
       ctx.save();
@@ -472,21 +441,6 @@ function handleCanvasDown(e) {
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       if (pointInPolygon(pos, poly.points)) {
-        // ここでスケール操作判定を追加（編集モード）
-        let scaleHandle = drawScaleHandle(poly);
-        if (pos.x >= scaleHandle.x - scaleHandle.size/2 &&
-            pos.x <= scaleHandle.x + scaleHandle.size/2 &&
-            pos.y >= scaleHandle.y - scaleHandle.size/2 &&
-            pos.y <= scaleHandle.y + scaleHandle.size/2) {
-          draggingScale = true;
-          scaleStartPos = pos;
-          scaleCentroid = scaleHandle.centroid;
-          scaleInitialPoints = poly.points.map(pt => ({ x: pt.x, y: pt.y }));
-          initialScaleDistance = Math.hypot(scaleHandle.x - scaleCentroid.x, scaleHandle.y - scaleCentroid.y);
-          selectedPolygonIndex = p;
-          selectedTextIndex = null;
-          return;
-        }
         draggingPolygon = true;
         currentDragPolyIndex = p;
         selectedPolygonIndex = p;
@@ -510,6 +464,7 @@ function handleCanvasDown(e) {
           pos.y >= tObj.y - height/2 && pos.y <= tObj.y + height/2) {
         selectedTextIndex = i;
         selectedPolygonIndex = null;
+        // テキストオブジェクトはドラッグ移動可能
         draggingText = true;
         currentDragTextIndex = i;
         textDragStart = pos;
@@ -530,25 +485,7 @@ function handleCanvasMove(e) {
   if (snapGridCheckbox && snapGridCheckbox.checked) {
     pos = snapToGrid(pos);
   }
-  if (draggingScale) {
-    e.preventDefault();
-    let currentDistance = Math.hypot(pos.x - scaleCentroid.x, pos.y - scaleCentroid.y);
-    let scaleFactor = currentDistance / initialScaleDistance;
-    let poly = (selectedPolygonIndex === "current") ? currentPolygon : polygons[selectedPolygonIndex];
-    poly.points = scaleInitialPoints.map(pt => {
-      return {
-        x: scaleCentroid.x + (pt.x - scaleCentroid.x) * scaleFactor,
-        y: scaleCentroid.y + (pt.y - scaleCentroid.y) * scaleFactor,
-        edgeProperty: pt.edgeProperty,
-        angleProperty: pt.angleProperty,
-        edgeControl: pt.edgeControl
-      };
-    });
-    stateChanged = true;
-    scheduleUpdate();
-    return;
-  }
-  else if (draggingEdgeControl && currentEdgeControlPolyIndex !== null && currentEdgeControlIndex !== null) {
+  if (draggingEdgeControl && currentEdgeControlPolyIndex !== null && currentEdgeControlIndex !== null) {
     e.preventDefault();
     if (currentEdgeControlPolyIndex === "current") {
       currentPolygon.points[currentEdgeControlIndex].edgeControl = { x: pos.x, y: pos.y };
@@ -622,7 +559,6 @@ function endDrag(e) {
   draggingVertex = false;
   draggingPolygon = false;
   draggingText = false;
-  draggingScale = false;
   currentEdgeControlPolyIndex = null;
   currentEdgeControlIndex = null;
   currentDragPolyIndex = null;
@@ -806,11 +742,6 @@ function updateDrawing() {
       ctx.stroke();
       ctx.restore();
     }
-  }
-  // 編集モード：もしポリゴンが選択されているなら、スケールハンドルを描画
-  if (currentMode === "edit" && selectedPolygonIndex !== null && selectedTextIndex === null) {
-    let poly = (selectedPolygonIndex === "current") ? currentPolygon : polygons[selectedPolygonIndex];
-    drawScaleHandle(poly);
   }
   updatePropertyPanel();
   ctx.restore();
