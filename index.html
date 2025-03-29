@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>図形作成支援ソフト</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <h1>図形作成支援ソフト</h1>
+  <p class="instructions">
+    【描画モード】では、Canvas 上をクリック／タッチして頂点を追加し、【ポリゴンを閉じる】で多角形を完成させます。<br>
+    複数の多角形を順次作成できます。<br>
+    【編集モード】では、作成済みの多角形がすべて表示され、クリックまたはドラッグで対象の多角形を選択すると、その多角形のプロパティが右側のパネルに表示されます。<br>
+    ※選択された多角形だけが移動や個別編集の対象となります。
+  </p>
+  <div class="modeSelect">
+    <label>
+      <input type="radio" name="mode" id="modeDraw" value="draw" checked> 描画モード
+    </label>
+    <label>
+      <input type="radio" name="mode" id="modeEdit" value="edit"> 編集モード
+    </label>
+  </div>
+  <div class="toolbar">
+    <label>
+      <input type="checkbox" id="showEdgeLength" checked>
+      全体 辺の長さ表示
+    </label>
+    <label>
+      <input type="checkbox" id="showAngle" checked>
+      全体 角表示
+    </label>
+    <!-- 既存のグリッド表示チェックボックス -->
+    <label>
+      <input type="checkbox" id="showGrid" checked>
+      グリッド表示
+    </label>
+    <!-- 新規追加：グリッドスナップチェックボックス -->
+    <label>
+      <input type="checkbox" id="snapGrid">
+      グリッドスナップ
+    </label>
+    <button id="closePolygonBtn">ポリゴンを閉じる</button>
+    <button id="clearBtn">クリア</button>
+  </div>
+  <div class="container">
+    <canvas id="drawingArea" width="800" height="600"></canvas>
+    <div id="propertyPanel">
+      <h2>ポリゴンのプロパティ</h2>
+      <div id="polyProperties">
+        <p>編集モードでポリゴンを選択してください。</p>
+      </div>
+    </div>
+  </div>
+  <script src="js/app.js"></script>
+</body>
+</html>
