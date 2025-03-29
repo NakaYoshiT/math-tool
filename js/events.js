@@ -2,6 +2,7 @@
 
 // ※ このファイルは core.js および drawing.js の後に読み込むこと
 
+// -------------------------------
 // グローバル変数（ポリゴン編集用）
 window.draggingEdgeControl = false;
 window.currentEdgeControlPolyIndex = null;
@@ -20,7 +21,9 @@ window.currentDragTextIndex = null;
 window.textDragStart = null;
 window.initialTextPos = null;
 
-// モードに応じたイベント設定
+// -------------------------------
+// イベントリスナー登録
+// -------------------------------
 canvas.addEventListener("mousedown", handleCanvasDown);
 canvas.addEventListener("touchstart", handleCanvasDown);
 canvas.addEventListener("mousemove", handleCanvasMove);
@@ -28,6 +31,53 @@ canvas.addEventListener("touchmove", handleCanvasMove);
 canvas.addEventListener("mouseup", endDrag);
 canvas.addEventListener("touchend", endDrag);
 
+// ズーム用の wheel イベントリスナー
+canvas.addEventListener("wheel", function(e) {
+  e.preventDefault();
+  const scaleFactor = 1.1;
+  if (e.deltaY < 0) {
+    zoomLevel *= scaleFactor;
+  } else {
+    zoomLevel /= scaleFactor;
+  }
+  zoomLevel = Math.max(0.5, Math.min(zoomLevel, 3));
+  updateDrawing();
+});
+
+clearBtn.addEventListener("click", handleClear);
+closePolygonBtn.addEventListener("click", handleClosePolygon);
+undoBtn.addEventListener("click", undo);
+redoBtn.addEventListener("click", redo);
+
+showEdgeLengthCheckbox.addEventListener("change", () => { saveState(); updateDrawing(); });
+showAngleCheckbox.addEventListener("change", () => { saveState(); updateDrawing(); });
+showGridCheckbox.addEventListener("change", updateDrawing);
+if (snapGridCheckbox) { snapGridCheckbox.addEventListener("change", updateDrawing); }
+
+modeDrawRadio.addEventListener("change", () => {
+  currentMode = "draw";
+  selectedPolygonIndex = null;
+  selectedTextIndex = null;
+  updateDrawing();
+});
+modeEditRadio.addEventListener("change", () => { 
+  currentMode = "edit"; 
+  updateDrawing();
+});
+modeDeleteRadio.addEventListener("change", () => { 
+  currentMode = "delete"; 
+  updateDrawing();
+});
+modeTextRadio.addEventListener("change", () => {
+  currentMode = "text";
+  selectedPolygonIndex = null;
+  selectedTextIndex = null;
+  updateDrawing();
+});
+
+// -------------------------------
+// イベントハンドラー実装
+// -------------------------------
 function handleCanvasDown(e) {
   e.preventDefault();
   let pos = getMousePos(e);
@@ -49,7 +99,7 @@ function handleCanvasDown(e) {
     return;
   }
   
-  // 消去モード：ポリゴン削除、続いてテキスト削除
+  // 消去モード：まずポリゴン削除、次にテキスト削除
   if (currentMode === "delete") {
     for (let p = polygons.length - 1; p >= 0; p--) {
       if (pointInPolygon(pos, polygons[p].points)) {
@@ -79,6 +129,7 @@ function handleCanvasDown(e) {
   }
   
   currentMousePos = null;
+  
   if (currentMode === "draw") {
     saveState();
     currentPolygon.points.push({
@@ -109,66 +160,41 @@ function handleCanvasDown(e) {
     updateDrawing();
   } else if (currentMode === "edit") {
     const threshold = 8;
-    // まずポリゴンの編集（頂点・エッジ）をチェック
+    // 【修正】まず、頂点・エッジのチェックを行う（優先して頂点操作が可能になる）
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
-      const edgeCount = poly.points.length > 0 ? (poly.isClosed ? poly.points.length : poly.points.length - 1) : 0;
-      for (let i = 0; i < edgeCount; i++) {
-        const cp = getEdgeControlPoint(poly, i);
-        const dx = pos.x - cp.x, dy = pos.y - cp.y;
-        if (Math.sqrt(dx*dx + dy*dy) < threshold) {
-          draggingEdgeControl = true;
-          currentEdgeControlPolyIndex = p;
-          currentEdgeControlIndex = i;
-          selectedPolygonIndex = p;
-          selectedTextIndex = null;
-          return;
-        }
-      }
-    }
-    if (currentPolygon.points.length > 0) {
-      const edgeCount = currentPolygon.points.length - 1;
-      for (let i = 0; i < edgeCount; i++) {
-        const cp = getEdgeControlPoint(currentPolygon, i);
-        const dx = pos.x - cp.x, dy = pos.y - cp.y;
-        if (Math.sqrt(dx*dx + dy*dy) < threshold) {
-          draggingEdgeControl = true;
-          currentEdgeControlPolyIndex = "current";
-          currentEdgeControlIndex = i;
-          selectedPolygonIndex = "current";
-          selectedTextIndex = null;
-          return;
-        }
-      }
-    }
-    for (let p = 0; p < polygons.length; p++) {
-      let poly = polygons[p];
+      // 頂点チェック
       for (let i = 0; i < poly.points.length; i++) {
-        const dx = pos.x - poly.points[i].x, dy = pos.y - poly.points[i].y;
-        if (Math.sqrt(dx*dx + dy*dy) < threshold) {
+        const dx = pos.x - poly.points[i].x;
+        const dy = pos.y - poly.points[i].y;
+        if (Math.sqrt(dx * dx + dy * dy) < threshold) {
           draggingVertex = true;
           currentDragPolyIndex = p;
           currentDragVertexIndex = i;
           selectedPolygonIndex = p;
           selectedTextIndex = null;
+          updateDrawing();
           return;
         }
       }
-    }
-    if (currentPolygon.points.length > 0) {
-      for (let i = 0; i < currentPolygon.points.length; i++) {
-        const dx = pos.x - currentPolygon.points[i].x, dy = pos.y - currentPolygon.points[i].y;
-        if (Math.sqrt(dx*dx + dy*dy) < threshold) {
-          draggingVertex = true;
-          currentDragPolyIndex = "current";
-          currentDragVertexIndex = i;
-          selectedPolygonIndex = "current";
+      // エッジコントロールチェック
+      const edgeCount = poly.points.length > 0 ? (poly.isClosed ? poly.points.length : poly.points.length - 1) : 0;
+      for (let i = 0; i < edgeCount; i++) {
+        const cp = getEdgeControlPoint(poly, i);
+        const dx = pos.x - cp.x;
+        const dy = pos.y - cp.y;
+        if (Math.sqrt(dx * dx + dy * dy) < threshold) {
+          draggingEdgeControl = true;
+          currentEdgeControlPolyIndex = p;
+          currentEdgeControlIndex = i;
+          selectedPolygonIndex = p;
           selectedTextIndex = null;
+          updateDrawing();
           return;
         }
       }
     }
-    // ポリゴン内部の選択
+    // 次、ポリゴン内部のチェック
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       if (pointInPolygon(pos, poly.points)) {
@@ -179,10 +205,11 @@ function handleCanvasDown(e) {
         polygonDragStart = pos;
         initialPolygonPoints = poly.points.map(pt => ({ x: pt.x, y: pt.y }));
         initialEdgeControls = poly.points.map(pt => pt.edgeControl ? { x: pt.edgeControl.x, y: pt.edgeControl.y } : null);
+        updateDrawing();
         return;
       }
     }
-    // 次に、テキストオブジェクトの選択
+    // 次、テキストのチェック
     for (let i = texts.length - 1; i >= 0; i--) {
       let tObj = texts[i];
       ctx.save();
@@ -202,6 +229,7 @@ function handleCanvasDown(e) {
         return;
       }
     }
+    // もし何も選択されなかったらクリア
     selectedPolygonIndex = null;
     selectedTextIndex = null;
   }
@@ -219,8 +247,7 @@ function handleCanvasMove(e) {
     } else {
       polygons[currentEdgeControlPolyIndex].points[currentEdgeControlIndex].edgeControl = { x: pos.x, y: pos.y };
     }
-    stateChanged = true;
-    scheduleUpdate();
+    updateDrawing();
   }
   else if (draggingVertex && currentDragPolyIndex !== null && currentDragVertexIndex !== null) {
     e.preventDefault();
@@ -231,8 +258,7 @@ function handleCanvasMove(e) {
       polygons[currentDragPolyIndex].points[currentDragVertexIndex].x = pos.x;
       polygons[currentDragPolyIndex].points[currentDragVertexIndex].y = pos.y;
     }
-    stateChanged = true;
-    scheduleUpdate();
+    updateDrawing();
   }
   else if (draggingPolygon && polygonDragStart) {
     e.preventDefault();
@@ -256,28 +282,23 @@ function handleCanvasMove(e) {
         }
       }
     }
-    stateChanged = true;
-    scheduleUpdate();
+    updateDrawing();
   }
   else if (draggingText && currentDragTextIndex !== null) {
     e.preventDefault();
     const dx = pos.x - textDragStart.x, dy = pos.y - textDragStart.y;
     texts[currentDragTextIndex].x = initialTextPos.x + dx;
     texts[currentDragTextIndex].y = initialTextPos.y + dy;
-    stateChanged = true;
-    scheduleUpdate();
+    updateDrawing();
   }
   else if (currentMode === "draw" || currentMode === "text") {
     currentMousePos = pos;
-    scheduleUpdate();
+    updateDrawing();
   }
 }
 
 function endDrag(e) {
-  if (stateChanged) {
-    saveState();
-    stateChanged = false;
-  }
+  saveState();
   draggingEdgeControl = false;
   draggingVertex = false;
   draggingPolygon = false;
@@ -290,13 +311,14 @@ function endDrag(e) {
   polygonDragStart = null;
   textDragStart = null;
 }
+
 canvas.addEventListener("mouseup", endDrag);
 canvas.addEventListener("touchend", endDrag);
 
 // -------------------------------
 // その他のボタンイベント
 // -------------------------------
-clearBtn.addEventListener("click", function() {
+function handleClear() {
   saveState();
   polygons = [];
   currentPolygon = { points: [], isClosed: false };
@@ -304,8 +326,9 @@ clearBtn.addEventListener("click", function() {
   selectedPolygonIndex = null;
   selectedTextIndex = null;
   updateDrawing();
-});
-closePolygonBtn.addEventListener("click", function() {
+}
+
+function handleClosePolygon() {
   if (currentMode === "draw") {
     if (currentPolygon.points.length > 2) {
       saveState();
@@ -317,14 +340,44 @@ closePolygonBtn.addEventListener("click", function() {
       alert("ポリゴンを閉じるには3点以上必要です。");
     }
   }
-});
-showEdgeLengthCheckbox.addEventListener("change", function() {
-  saveState();
-  updateDrawing();
-});
-showAngleCheckbox.addEventListener("change", function() {
-  saveState();
-  updateDrawing();
-});
-showGridCheckbox.addEventListener("change", updateDrawing);
-if(snapGridCheckbox) { snapGridCheckbox.addEventListener("change", updateDrawing); }
+}
+
+function handleDeleteMode(pos) {
+  // まずポリゴン削除
+  for (let p = polygons.length - 1; p >= 0; p--) {
+    if (pointInPolygon(pos, polygons[p].points)) {
+      saveState();
+      polygons.splice(p, 1);
+      updateDrawing();
+      return;
+    }
+  }
+  // 次、テキスト削除
+  for (let i = texts.length - 1; i >= 0; i--) {
+    let tObj = texts[i];
+    ctx.save();
+    ctx.font = (tObj.fontSize || 16) + "px sans-serif";
+    let metrics = ctx.measureText(tObj.content);
+    let width = metrics.width, height = tObj.fontSize;
+    ctx.restore();
+    if (pos.x >= tObj.x - width/2 && pos.x <= tObj.x + width/2 &&
+        pos.y >= tObj.y - height/2 && pos.y <= tObj.y + height/2) {
+      saveState();
+      texts.splice(i, 1);
+      updateDrawing();
+      return;
+    }
+  }
+}
+
+function handleEditModeDown(pos) {
+  // 既に handleCanvasDown 内で処理済みのため、追加処理は不要
+}
+
+// 再登録（万が一のため）
+canvas.addEventListener("mousedown", handleCanvasDown);
+canvas.addEventListener("touchstart", handleCanvasDown);
+canvas.addEventListener("mousemove", handleCanvasMove);
+canvas.addEventListener("touchmove", handleCanvasMove);
+canvas.addEventListener("mouseup", endDrag);
+canvas.addEventListener("touchend", endDrag);
