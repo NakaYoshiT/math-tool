@@ -28,7 +28,7 @@ let currentEdgeControlIndex = null; // 辺番号内でのインデックス
 let draggingPolygon = false;
 let polygonDragStart = null;
 let initialPolygonPoints = [];    // 選択された多角形の各頂点の初期座標
-let initialEdgeControls = [];     // 同じ多角形の各頂点の edgeControl 初期値
+let initialEdgeControls = [];     // 各頂点の edgeControl 初期値
 
 // 現在選択中の多角形（"current" またはインデックス）
 let selectedPolygonIndex = null;
@@ -54,7 +54,7 @@ const canvas = document.getElementById("drawingArea");
 const ctx = canvas.getContext("2d");
 const modeDrawRadio = document.getElementById("modeDraw");
 const modeEditRadio = document.getElementById("modeEdit");
-// 新規追加：消去モード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeDelete" value="delete"> を追加）
+// 消去モード用ラジオボタン（index.html に追加）
 const modeDeleteRadio = document.getElementById("modeDelete");
 
 const showEdgeLengthCheckbox = document.getElementById("showEdgeLength");
@@ -64,9 +64,9 @@ const clearBtn = document.getElementById("clearBtn");
 const polyPropertiesDiv = document.getElementById("polyProperties");
 // グリッド表示チェックボックス
 const showGridCheckbox = document.getElementById("showGrid");
-// グリッドスナップチェックボックス（index.html に <input type="checkbox" id="snapGrid"> を追加）
+// グリッドスナップチェックボックス（index.html に追加）
 const snapGridCheckbox = document.getElementById("snapGrid");
-// undo/redo ボタン（index.html に <button id="undoBtn">Undo</button> と <button id="redoBtn">Redo</button> を追加）
+// undo/redo ボタン（index.html に追加）
 const undoBtn = document.getElementById("undoBtn");
 const redoBtn = document.getElementById("redoBtn");
 
@@ -105,7 +105,6 @@ function saveState() {
     currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
   };
   undoStack.push(state);
-  // 新たな操作があったので redo スタックはクリア
   redoStack = [];
 }
 
@@ -264,7 +263,6 @@ if (modeDeleteRadio) {
   });
 }
 
-// undo/redo ボタンのイベント
 if (undoBtn) { undoBtn.addEventListener("click", undo); }
 if (redoBtn) { redoBtn.addEventListener("click", redo); }
 
@@ -275,9 +273,7 @@ function handleCanvasDown(e) {
     pos = snapToGrid(pos);
   }
   
-  // もし消去モードなら、クリック位置にあるポリゴンを削除
   if (currentMode === "delete") {
-    // 後ろから探索（上に重なっているものを優先）
     for (let p = polygons.length - 1; p >= 0; p--) {
       if (pointInPolygon(pos, polygons[p].points)) {
         saveState();
@@ -302,14 +298,26 @@ function handleCanvasDown(e) {
         bezierColor: "black", 
         labelColor: "black", 
         labelOverride: "",
-        bezierGap: 0.1
+        bezierGap: 0.1,
+        // 新規追加：ラベル位置・文字サイズ（エッジ）
+        labelOffsetX: 0,
+        labelOffsetY: 0,
+        labelFontSize: 12
       },
-      angleProperty: { showAngle: true, radius: 30, labelOverride: "", fanPosition: 0 }
+      angleProperty: { 
+        showAngle: true, 
+        radius: 30, 
+        labelOverride: "",
+        fanPosition: 0,
+        // 新規追加：ラベル位置・文字サイズ（角）
+        labelOffsetX: 0,
+        labelOffsetY: 0,
+        labelFontSize: 12
+      }
     });
     updateDrawing();
   } else if (currentMode === "edit") {
     const threshold = 8;
-    // エッジコントロールの選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       const edgeCount = poly.points.length > 0 ? (poly.isClosed ? poly.points.length : poly.points.length - 1) : 0;
@@ -326,7 +334,6 @@ function handleCanvasDown(e) {
         }
       }
     }
-    // 未完成ポリゴンのエッジコントロール
     if (currentPolygon.points.length > 0) {
       const edgeCount = currentPolygon.points.length - 1;
       for (let i = 0; i < edgeCount; i++) {
@@ -342,7 +349,6 @@ function handleCanvasDown(e) {
         }
       }
     }
-    // 頂点の選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       for (let i = 0; i < poly.points.length; i++) {
@@ -370,7 +376,6 @@ function handleCanvasDown(e) {
         }
       }
     }
-    // ポリゴン内部の選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       if (pointInPolygon(pos, poly.points)) {
@@ -660,13 +665,18 @@ function drawEdgeLengthBezier(p1, p2, cp) {
   const derivative = { x: pt2.x - pt1.x, y: pt2.y - pt1.y };
   const norm = Math.sqrt(derivative.x*derivative.x + derivative.y*derivative.y);
   const normal = { x: -derivative.y/norm, y: derivative.x/norm };
-  const offset = 5;
+  // もともとのオフセットと固定シフトに加え、edgeProperty.labelOffsetX/Yを反映
+  const baseOffset = 5;
+  const verticalShift = -10;
+  const xAdj = p1.edgeProperty.labelOffsetX || 0;
+  const yAdj = p1.edgeProperty.labelOffsetY || 0;
+  const fontSize = p1.edgeProperty.labelFontSize || 12;
   const textPos = { 
-    x: mid.x + normal.x * offset, 
-    y: mid.y + normal.y * offset - 10 
+    x: mid.x + normal.x * baseOffset + xAdj, 
+    y: mid.y + normal.y * baseOffset + verticalShift + yAdj 
   };
   ctx.fillStyle = p1.edgeProperty.labelColor;
-  ctx.font = "12px sans-serif";
+  ctx.font = fontSize + "px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const label = p1.edgeProperty.labelOverride.trim() !== "" ? p1.edgeProperty.labelOverride : len.toFixed(1);
@@ -735,10 +745,16 @@ function drawAngleFan(pPrev, p, pNext, radius) {
   ctx.strokeStyle = "red";
   ctx.lineWidth = 1;
   ctx.stroke();
-  const textX = p.x + (radius+10)*Math.cos(center);
-  const textY = p.y + (radius+10)*Math.sin(center);
+  // テキスト位置：もともとの位置に加え、angleProperty.labelOffsetX/Yを反映
+  const baseX = p.x + (radius+10)*Math.cos(center);
+  const baseY = p.y + (radius+10)*Math.sin(center);
+  const xAdj = p.angleProperty.labelOffsetX || 0;
+  const yAdj = p.angleProperty.labelOffsetY || 0;
+  const fontSize = p.angleProperty.labelFontSize || 12;
+  const textX = baseX + xAdj;
+  const textY = baseY + yAdj;
   ctx.fillStyle = "red";
-  ctx.font = "12px sans-serif";
+  ctx.font = fontSize + "px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   const label = p.angleProperty.labelOverride.trim() !== "" ? p.angleProperty.labelOverride : (absDiff*180/Math.PI).toFixed(1)+"°";
@@ -797,7 +813,6 @@ function updatePropertyPanel() {
   header.textContent = headerText;
   polyContainer.appendChild(header);
   
-  // 複製ボタン（完成済みの場合のみ）
   if (selectedPolygonIndex !== "current") {
     const duplicateBtn = document.createElement("button");
     duplicateBtn.textContent = "複製";
@@ -807,7 +822,6 @@ function updatePropertyPanel() {
     polyContainer.appendChild(duplicateBtn);
   }
   
-  // 各種プロパティの入力欄（値変更時は saveState() を呼び出す）
   const edgeHeader = document.createElement("div");
   edgeHeader.className = "subHeader";
   edgeHeader.textContent = "辺のプロパティ";
@@ -830,7 +844,6 @@ function updatePropertyPanel() {
     label.textContent = `辺 ${i+1} 表示`;
     container.appendChild(label);
     
-    // 線分色
     const segmentColorInput = document.createElement("input");
     segmentColorInput.type = "color";
     segmentColorInput.value = poly.points[i].edgeProperty.segmentColor;
@@ -842,7 +855,6 @@ function updatePropertyPanel() {
     container.appendChild(document.createTextNode(" 線分色: "));
     container.appendChild(segmentColorInput);
     
-    // ベジェ曲線色
     const bezierColorInput = document.createElement("input");
     bezierColorInput.type = "color";
     bezierColorInput.value = poly.points[i].edgeProperty.bezierColor;
@@ -854,7 +866,6 @@ function updatePropertyPanel() {
     container.appendChild(document.createTextNode(" ベジェ色: "));
     container.appendChild(bezierColorInput);
     
-    // ラベル色
     const labelColorInput = document.createElement("input");
     labelColorInput.type = "color";
     labelColorInput.value = poly.points[i].edgeProperty.labelColor;
@@ -866,7 +877,6 @@ function updatePropertyPanel() {
     container.appendChild(document.createTextNode(" ラベル色: "));
     container.appendChild(labelColorInput);
     
-    // ラベルのオーバーライド入力
     const textInput = document.createElement("input");
     textInput.type = "text";
     textInput.placeholder = "自動値";
@@ -879,7 +889,6 @@ function updatePropertyPanel() {
     container.appendChild(document.createTextNode(" 表示ラベル: "));
     container.appendChild(textInput);
     
-    // ベジェ曲線切れ目スライダー
     const gapRangeElem = createLabelRange("ベジェ切れ目", poly.points[i].edgeProperty.bezierGap, 0, 1, 0.05, (ev) => {
       poly.points[i].edgeProperty.bezierGap = parseFloat(ev.target.value);
       saveState();
@@ -887,10 +896,46 @@ function updatePropertyPanel() {
     });
     container.appendChild(gapRangeElem);
     
+    // 追加：ラベル位置X, Y, 文字サイズ（エッジ）
+    const offsetXInput = document.createElement("input");
+    offsetXInput.type = "number";
+    offsetXInput.value = poly.points[i].edgeProperty.labelOffsetX || 0;
+    offsetXInput.style.width = "60px";
+    offsetXInput.addEventListener("change", function() {
+      poly.points[i].edgeProperty.labelOffsetX = parseFloat(offsetXInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(document.createTextNode(" ラベルX: "));
+    container.appendChild(offsetXInput);
+    
+    const offsetYInput = document.createElement("input");
+    offsetYInput.type = "number";
+    offsetYInput.value = poly.points[i].edgeProperty.labelOffsetY || 0;
+    offsetYInput.style.width = "60px";
+    offsetYInput.addEventListener("change", function() {
+      poly.points[i].edgeProperty.labelOffsetY = parseFloat(offsetYInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(document.createTextNode(" ラベルY: "));
+    container.appendChild(offsetYInput);
+    
+    const fontSizeInput = document.createElement("input");
+    fontSizeInput.type = "number";
+    fontSizeInput.value = poly.points[i].edgeProperty.labelFontSize || 12;
+    fontSizeInput.style.width = "60px";
+    fontSizeInput.addEventListener("change", function() {
+      poly.points[i].edgeProperty.labelFontSize = parseFloat(fontSizeInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(document.createTextNode(" 文字サイズ: "));
+    container.appendChild(fontSizeInput);
+    
     polyContainer.appendChild(container);
   }
   
-  // 角のプロパティ
   const angleHeader = document.createElement("div");
   angleHeader.className = "subHeader";
   angleHeader.textContent = "角のプロパティ";
@@ -916,6 +961,7 @@ function updatePropertyPanel() {
     const angleLabel = document.createElement("label");
     angleLabel.textContent = `頂点 ${i+1} 表示`;
     container.appendChild(angleLabel);
+    
     const radiusSlider = document.createElement("input");
     radiusSlider.type = "range";
     radiusSlider.min = "10";
@@ -932,6 +978,7 @@ function updatePropertyPanel() {
     container.appendChild(document.createTextNode(" 半径: "));
     container.appendChild(radiusSlider);
     container.appendChild(radiusSpan);
+    
     const fanCheckbox = document.createElement("input");
     fanCheckbox.type = "checkbox";
     fanCheckbox.checked = (poly.points[i].angleProperty.fanPosition === 1);
@@ -942,6 +989,7 @@ function updatePropertyPanel() {
     });
     container.appendChild(document.createTextNode(" 外側扇形: "));
     container.appendChild(fanCheckbox);
+    
     const angleTextInput = document.createElement("input");
     angleTextInput.type = "text";
     angleTextInput.placeholder = "自動値";
@@ -953,6 +1001,44 @@ function updatePropertyPanel() {
     });
     container.appendChild(document.createTextNode(" 表示ラベル: "));
     container.appendChild(angleTextInput);
+    
+    // 追加：角ラベルの位置・文字サイズ
+    const angleOffsetXInput = document.createElement("input");
+    angleOffsetXInput.type = "number";
+    angleOffsetXInput.value = poly.points[i].angleProperty.labelOffsetX || 0;
+    angleOffsetXInput.style.width = "60px";
+    angleOffsetXInput.addEventListener("change", function() {
+      poly.points[i].angleProperty.labelOffsetX = parseFloat(angleOffsetXInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(document.createTextNode(" ラベルX: "));
+    container.appendChild(angleOffsetXInput);
+    
+    const angleOffsetYInput = document.createElement("input");
+    angleOffsetYInput.type = "number";
+    angleOffsetYInput.value = poly.points[i].angleProperty.labelOffsetY || 0;
+    angleOffsetYInput.style.width = "60px";
+    angleOffsetYInput.addEventListener("change", function() {
+      poly.points[i].angleProperty.labelOffsetY = parseFloat(angleOffsetYInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(document.createTextNode(" ラベルY: "));
+    container.appendChild(angleOffsetYInput);
+    
+    const angleFontSizeInput = document.createElement("input");
+    angleFontSizeInput.type = "number";
+    angleFontSizeInput.value = poly.points[i].angleProperty.labelFontSize || 12;
+    angleFontSizeInput.style.width = "60px";
+    angleFontSizeInput.addEventListener("change", function() {
+      poly.points[i].angleProperty.labelFontSize = parseFloat(angleFontSizeInput.value);
+      saveState();
+      updateDrawing();
+    });
+    container.appendChild(document.createTextNode(" 文字サイズ: "));
+    container.appendChild(angleFontSizeInput);
+    
     polyContainer.appendChild(container);
   });
   
