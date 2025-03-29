@@ -41,6 +41,12 @@ let currentMousePos = null;
 // ズーム用変数
 let zoomLevel = 1;
 
+// undo/redo 用のスタック
+let undoStack = [];
+let redoStack = [];
+// ドラッグ操作などで変更があったかを示すフラグ
+let stateChanged = false;
+
 // HTML要素
 const canvas = document.getElementById("drawingArea");
 const ctx = canvas.getContext("2d");
@@ -55,6 +61,9 @@ const polyPropertiesDiv = document.getElementById("polyProperties");
 const showGridCheckbox = document.getElementById("showGrid");
 // グリッドスナップチェックボックス（HTML 側に <input type="checkbox" id="snapGrid"> を用意）
 const snapGridCheckbox = document.getElementById("snapGrid");
+// undo/redo ボタン（HTML 側に <button id="undoBtn">Undo</button> と <button id="redoBtn">Redo</button> を追加）
+const undoBtn = document.getElementById("undoBtn");
+const redoBtn = document.getElementById("redoBtn");
 
 // -------------------------------
 // 補助関数：createLabelRange
@@ -80,6 +89,50 @@ function createLabelRange(labelText, initialValue, min, max, step, onChange) {
   wrapper.appendChild(rangeInput);
   wrapper.appendChild(valueSpan);
   return wrapper;
+}
+
+// -------------------------------
+// undo/redo 関連のユーティリティ
+// -------------------------------
+function saveState() {
+  const state = {
+    polygons: JSON.parse(JSON.stringify(polygons)),
+    currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
+  };
+  undoStack.push(state);
+  // 新たな操作があったので redo スタックはクリア
+  redoStack = [];
+}
+
+function restoreState(state) {
+  polygons = JSON.parse(JSON.stringify(state.polygons));
+  currentPolygon = JSON.parse(JSON.stringify(state.currentPolygon));
+  updateDrawing();
+}
+
+function undo() {
+  if (undoStack.length > 0) {
+    // 現在の状態を redo に保存
+    const currentState = {
+      polygons: JSON.parse(JSON.stringify(polygons)),
+      currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
+    };
+    redoStack.push(currentState);
+    const prevState = undoStack.pop();
+    restoreState(prevState);
+  }
+}
+
+function redo() {
+  if (redoStack.length > 0) {
+    const currentState = {
+      polygons: JSON.parse(JSON.stringify(polygons)),
+      currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
+    };
+    undoStack.push(currentState);
+    const nextState = redoStack.pop();
+    restoreState(nextState);
+  }
 }
 
 // -------------------------------
@@ -200,6 +253,10 @@ modeEditRadio.addEventListener("change", function() {
   }
 });
 
+// undo/redo ボタンのイベントリスナー
+if(undoBtn) { undoBtn.addEventListener("click", undo); }
+if(redoBtn) { redoBtn.addEventListener("click", redo); }
+
 function handleCanvasDown(e) {
   e.preventDefault();
   let pos = getMousePos(e);
@@ -209,6 +266,8 @@ function handleCanvasDown(e) {
   }
   currentMousePos = null;
   if (currentMode === "draw") {
+    // 保存前の状態を記録（新規頂点追加前）
+    saveState();
     currentPolygon.points.push({
       x: pos.x,
       y: pos.y,
@@ -329,6 +388,7 @@ function handleCanvasMove(e) {
     } else {
       polygons[currentEdgeControlPolyIndex].points[currentEdgeControlIndex].edgeControl = { x: pos.x, y: pos.y };
     }
+    stateChanged = true;
     scheduleUpdate();
   }
   else if (draggingVertex && currentDragPolyIndex !== null && currentDragVertexIndex !== null) {
@@ -340,6 +400,7 @@ function handleCanvasMove(e) {
       polygons[currentDragPolyIndex].points[currentDragVertexIndex].x = pos.x;
       polygons[currentDragPolyIndex].points[currentDragVertexIndex].y = pos.y;
     }
+    stateChanged = true;
     scheduleUpdate();
   }
   else if (draggingPolygon && polygonDragStart) {
@@ -365,6 +426,7 @@ function handleCanvasMove(e) {
         }
       }
     }
+    stateChanged = true;
     scheduleUpdate();
   }
   else if (currentMode === "draw") {
@@ -376,6 +438,10 @@ canvas.addEventListener("mousemove", handleCanvasMove);
 canvas.addEventListener("touchmove", handleCanvasMove);
 
 function endDrag(e) {
+  if (stateChanged) {
+    saveState();
+    stateChanged = false;
+  }
   draggingEdgeControl = false;
   draggingVertex = false;
   draggingPolygon = false;
@@ -389,6 +455,7 @@ canvas.addEventListener("mouseup", endDrag);
 canvas.addEventListener("touchend", endDrag);
 
 clearBtn.addEventListener("click", function() {
+  saveState();
   polygons = [];
   currentPolygon = { points: [], isClosed: false };
   selectedPolygonIndex = null;
@@ -397,6 +464,7 @@ clearBtn.addEventListener("click", function() {
 closePolygonBtn.addEventListener("click", function() {
   if (currentMode === "draw") {
     if (currentPolygon.points.length > 2) {
+      saveState();
       currentPolygon.isClosed = true;
       polygons.push(currentPolygon);
       currentPolygon = { points: [], isClosed: false };
@@ -671,8 +739,8 @@ function drawEdgeControl(cp) {
 // ポリゴン複製機能（ディープコピーして polygons に追加）
 function duplicatePolygon(poly) {
   const newPoly = JSON.parse(JSON.stringify(poly));
-  // 複製したポリゴンはそのまま完成済みとして扱う
   polygons.push(newPoly);
+  saveState();
   updateDrawing();
 }
 
