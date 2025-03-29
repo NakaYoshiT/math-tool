@@ -14,7 +14,8 @@
 // -------------------------------
 let polygons = [];  // 完成した多角形（各 poly は { points: [...], isClosed: true }）
 let currentPolygon = { points: [], isClosed: false };
-let texts = [];     // テキストオブジェクトの配列
+let texts = [];     // テキストオブジェクトの配列。各オブジェクトは { x, y, content, fontSize, color } を持つ
+
 // 現在のモード ("draw", "edit", "delete", "text")
 let currentMode = "draw";
 
@@ -30,7 +31,13 @@ let polygonDragStart = null;
 let initialPolygonPoints = [];    // 選択された多角形の各頂点の初期座標
 let initialEdgeControls = [];     // 各頂点の edgeControl 初期値
 
-// 選択中のオブジェクト（ポリゴンかテキスト）
+// テキスト編集用のドラッグ状態
+let draggingText = false;
+let currentDragTextIndex = null;
+let textDragStart = null;
+let initialTextPos = null;
+
+// 選択中のオブジェクト（ポリゴンまたはテキスト）
 // ポリゴンが選択中の場合は selectedPolygonIndex に数値が入り、テキストの場合は selectedTextIndex に数値が入る
 let selectedPolygonIndex = null;
 let selectedTextIndex = null;
@@ -56,9 +63,9 @@ const canvas = document.getElementById("drawingArea");
 const ctx = canvas.getContext("2d");
 const modeDrawRadio = document.getElementById("modeDraw");
 const modeEditRadio = document.getElementById("modeEdit");
-// 新規追加：消去モード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeDelete" value="delete"> を追加）
+// 消去モード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeDelete" value="delete"> を追加）
 const modeDeleteRadio = document.getElementById("modeDelete");
-// 新規追加：テキストモード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeText" value="text"> を追加）
+// テキストモード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeText" value="text"> を追加）
 const modeTextRadio = document.getElementById("modeText");
 
 const showEdgeLengthCheckbox = document.getElementById("showEdgeLength");
@@ -292,7 +299,7 @@ function handleCanvasDown(e) {
     pos = snapToGrid(pos);
   }
   
-  // テキストモードの場合：クリック位置に新規テキストを配置
+  // テキストモード：クリック位置に新規テキスト配置
   if (currentMode === "text") {
     saveState();
     texts.push({
@@ -306,12 +313,29 @@ function handleCanvasDown(e) {
     return;
   }
   
-  // 消去モードの場合：クリック位置の最前面のポリゴンを削除
+  // 消去モード：まずポリゴン、次にテキストをチェック
   if (currentMode === "delete") {
     for (let p = polygons.length - 1; p >= 0; p--) {
       if (pointInPolygon(pos, polygons[p].points)) {
         saveState();
         polygons.splice(p, 1);
+        updateDrawing();
+        return;
+      }
+    }
+    // テキストは、文字列のバウンディングボックスを基に削除
+    for (let i = texts.length - 1; i >= 0; i--) {
+      let tObj = texts[i];
+      ctx.save();
+      ctx.font = (tObj.fontSize || 16) + "px sans-serif";
+      let metrics = ctx.measureText(tObj.content);
+      let width = metrics.width;
+      let height = tObj.fontSize;
+      ctx.restore();
+      if (pos.x >= tObj.x - width/2 && pos.x <= tObj.x + width/2 &&
+          pos.y >= tObj.y - height/2 && pos.y <= tObj.y + height/2) {
+        saveState();
+        texts.splice(i, 1);
         updateDrawing();
         return;
       }
@@ -413,7 +437,7 @@ function handleCanvasDown(e) {
         }
       }
     }
-    // ポリゴン内部選択
+    // ポリゴン内部の選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       if (pointInPolygon(pos, poly.points)) {
@@ -427,19 +451,24 @@ function handleCanvasDown(e) {
         return;
       }
     }
-    // もしポリゴンが選択されなかった場合、テキストオブジェクトの選択を試みる
+    // 次に、テキストオブジェクトの選択（後ろから探索）
     for (let i = texts.length - 1; i >= 0; i--) {
-      let t = texts[i];
+      let tObj = texts[i];
       ctx.save();
-      ctx.font = (t.fontSize || 16) + "px sans-serif";
-      let metrics = ctx.measureText(t.content);
+      ctx.font = (tObj.fontSize || 16) + "px sans-serif";
+      let metrics = ctx.measureText(tObj.content);
       let width = metrics.width;
-      let height = t.fontSize;
+      let height = tObj.fontSize;
       ctx.restore();
-      if (pos.x >= t.x - width/2 && pos.x <= t.x + width/2 &&
-          pos.y >= t.y - height/2 && pos.y <= t.y + height/2) {
+      if (pos.x >= tObj.x - width/2 && pos.x <= tObj.x + width/2 &&
+          pos.y >= tObj.y - height/2 && pos.y <= tObj.y + height/2) {
         selectedTextIndex = i;
         selectedPolygonIndex = null;
+        // テキストオブジェクトはドラッグ移動可能
+        draggingText = true;
+        currentDragTextIndex = i;
+        textDragStart = pos;
+        initialTextPos = { x: tObj.x, y: tObj.y };
         updateDrawing();
         return;
       }
@@ -504,6 +533,15 @@ function handleCanvasMove(e) {
     stateChanged = true;
     scheduleUpdate();
   }
+  else if (draggingText && currentDragTextIndex !== null) {
+    e.preventDefault();
+    const dx = pos.x - textDragStart.x;
+    const dy = pos.y - textDragStart.y;
+    texts[currentDragTextIndex].x = initialTextPos.x + dx;
+    texts[currentDragTextIndex].y = initialTextPos.y + dy;
+    stateChanged = true;
+    scheduleUpdate();
+  }
   else if (currentMode === "draw" || currentMode === "text") {
     currentMousePos = pos;
     scheduleUpdate();
@@ -520,11 +558,14 @@ function endDrag(e) {
   draggingEdgeControl = false;
   draggingVertex = false;
   draggingPolygon = false;
+  draggingText = false;
   currentEdgeControlPolyIndex = null;
   currentEdgeControlIndex = null;
   currentDragPolyIndex = null;
   currentDragVertexIndex = null;
+  currentDragTextIndex = null;
   polygonDragStart = null;
+  textDragStart = null;
 }
 canvas.addEventListener("mouseup", endDrag);
 canvas.addEventListener("touchend", endDrag);
@@ -636,7 +677,7 @@ function updateDrawing() {
       }
     }
   });
-  // テキストオブジェクト描画
+  // テキスト描画
   texts.forEach((t, index) => {
     ctx.fillStyle = t.color;
     ctx.font = t.fontSize + "px sans-serif";
@@ -855,12 +896,11 @@ function duplicatePolygon(poly) {
 // -------------------------------
 function updatePropertyPanel() {
   polyPropertiesDiv.innerHTML = "";
-  // 編集モード時、選択されているオブジェクトがあれば表示
+  // 編集モード時、選択されているオブジェクト（ポリゴン or テキスト）に応じたプロパティを表示
   if (currentMode !== "edit" || (selectedPolygonIndex === null && selectedTextIndex === null)) {
     polyPropertiesDiv.innerHTML = "<p>オブジェクトが選択されていません</p>";
     return;
   }
-  // テキストオブジェクトが選択されている場合
   if (selectedTextIndex !== null) {
     let tObj = texts[selectedTextIndex];
     let container = document.createElement("div");
