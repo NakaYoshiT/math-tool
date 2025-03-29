@@ -2,6 +2,7 @@
  * 図形作成支援ソフト JavaScript
  * 構造:
  * - データ管理と初期化
+ * - undo/redo 用状態管理
  * - ユーティリティ関数
  * - イベントハンドラー
  * - 描画関数
@@ -14,7 +15,7 @@
 let polygons = [];  // 完成した多角形（各 poly は { points: [...], isClosed: true }）
 let currentPolygon = { points: [], isClosed: false };
 
-// 現在のモード ("draw" または "edit")
+// 現在のモード ("draw", "edit", "delete")
 let currentMode = "draw";
 
 // 編集時のドラッグ状態
@@ -25,12 +26,11 @@ let draggingEdgeControl = false;
 let currentEdgeControlPolyIndex = null;
 let currentEdgeControlIndex = null; // 辺番号内でのインデックス
 let draggingPolygon = false;
-let currentDragPolygonIndex = null; // 選択された多角形（完成済みまたは "current"）
 let polygonDragStart = null;
 let initialPolygonPoints = [];    // 選択された多角形の各頂点の初期座標
 let initialEdgeControls = [];     // 同じ多角形の各頂点の edgeControl 初期値
 
-// 現在選択中の多角形を示す変数（完成済みの場合はインデックス、未完成の場合は "current"）
+// 現在選択中の多角形（"current" またはインデックス）
 let selectedPolygonIndex = null;
 
 let updateScheduled = false;
@@ -44,14 +44,19 @@ let zoomLevel = 1;
 // undo/redo 用のスタック
 let undoStack = [];
 let redoStack = [];
-// ドラッグ操作などで変更があったかを示すフラグ
+// ドラッグ操作等で変更があったかのフラグ
 let stateChanged = false;
 
+// -------------------------------
 // HTML要素
+// -------------------------------
 const canvas = document.getElementById("drawingArea");
 const ctx = canvas.getContext("2d");
 const modeDrawRadio = document.getElementById("modeDraw");
 const modeEditRadio = document.getElementById("modeEdit");
+// 新規追加：消去モード用ラジオボタン（index.html に <input type="radio" name="mode" id="modeDelete" value="delete"> を追加）
+const modeDeleteRadio = document.getElementById("modeDelete");
+
 const showEdgeLengthCheckbox = document.getElementById("showEdgeLength");
 const showAngleCheckbox = document.getElementById("showAngle");
 const closePolygonBtn = document.getElementById("closePolygonBtn");
@@ -59,9 +64,9 @@ const clearBtn = document.getElementById("clearBtn");
 const polyPropertiesDiv = document.getElementById("polyProperties");
 // グリッド表示チェックボックス
 const showGridCheckbox = document.getElementById("showGrid");
-// グリッドスナップチェックボックス（HTML 側に <input type="checkbox" id="snapGrid"> を用意）
+// グリッドスナップチェックボックス（index.html に <input type="checkbox" id="snapGrid"> を追加）
 const snapGridCheckbox = document.getElementById("snapGrid");
-// undo/redo ボタン（HTML 側に <button id="undoBtn">Undo</button> と <button id="redoBtn">Redo</button> を追加）
+// undo/redo ボタン（index.html に <button id="undoBtn">Undo</button> と <button id="redoBtn">Redo</button> を追加）
 const undoBtn = document.getElementById("undoBtn");
 const redoBtn = document.getElementById("redoBtn");
 
@@ -112,7 +117,6 @@ function restoreState(state) {
 
 function undo() {
   if (undoStack.length > 0) {
-    // 現在の状態を redo に保存
     const currentState = {
       polygons: JSON.parse(JSON.stringify(polygons)),
       currentPolygon: JSON.parse(JSON.stringify(currentPolygon))
@@ -139,7 +143,7 @@ function redo() {
 // ユーティリティ関数
 // -------------------------------
 
-// 座標取得ユーティリティ（ズームを考慮）
+// 座標取得ユーティリティ（ズーム考慮）
 function getMousePos(event) {
   const rect = canvas.getBoundingClientRect();
   let x, y;
@@ -150,7 +154,6 @@ function getMousePos(event) {
     x = event.clientX - rect.left;
     y = event.clientY - rect.top;
   }
-  // ズーム分で補正
   x /= zoomLevel;
   y /= zoomLevel;
   return { x, y };
@@ -165,7 +168,7 @@ function snapToGrid(pos) {
   };
 }
 
-// 点が多角形の内部にあるか判定（ray-casting）
+// 点が多角形内部にあるか（ray-casting）
 function pointInPolygon(point, polyPoints) {
   let inside = false;
   for (let i = 0, j = polyPoints.length - 1; i < polyPoints.length; j = i++) {
@@ -205,7 +208,7 @@ function scheduleUpdate() {
   }
 }
 
-// 角度補間用関数（角度のラップアラウンドに対応）
+// 角度補間（ラップアラウンド対応）
 function lerpAngle(a, b, t) {
   let diff = b - a;
   while(diff < -Math.PI) diff += 2*Math.PI;
@@ -252,21 +255,42 @@ modeEditRadio.addEventListener("change", function() {
     updateDrawing();
   }
 });
+if (modeDeleteRadio) {
+  modeDeleteRadio.addEventListener("change", function() {
+    if (modeDeleteRadio.checked) {
+      currentMode = "delete";
+      updateDrawing();
+    }
+  });
+}
 
-// undo/redo ボタンのイベントリスナー
-if(undoBtn) { undoBtn.addEventListener("click", undo); }
-if(redoBtn) { redoBtn.addEventListener("click", redo); }
+// undo/redo ボタンのイベント
+if (undoBtn) { undoBtn.addEventListener("click", undo); }
+if (redoBtn) { redoBtn.addEventListener("click", redo); }
 
 function handleCanvasDown(e) {
   e.preventDefault();
   let pos = getMousePos(e);
-  // グリッドスナップが有効ならスナップ処理
   if (snapGridCheckbox && snapGridCheckbox.checked) {
     pos = snapToGrid(pos);
   }
+  
+  // もし消去モードなら、クリック位置にあるポリゴンを削除
+  if (currentMode === "delete") {
+    // 後ろから探索（上に重なっているものを優先）
+    for (let p = polygons.length - 1; p >= 0; p--) {
+      if (pointInPolygon(pos, polygons[p].points)) {
+        saveState();
+        polygons.splice(p, 1);
+        updateDrawing();
+        return;
+      }
+    }
+    return;
+  }
+  
   currentMousePos = null;
   if (currentMode === "draw") {
-    // 保存前の状態を記録（新規頂点追加前）
     saveState();
     currentPolygon.points.push({
       x: pos.x,
@@ -283,8 +307,9 @@ function handleCanvasDown(e) {
       angleProperty: { showAngle: true, radius: 30, labelOverride: "", fanPosition: 0 }
     });
     updateDrawing();
-  } else {
+  } else if (currentMode === "edit") {
     const threshold = 8;
+    // エッジコントロールの選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       const edgeCount = poly.points.length > 0 ? (poly.isClosed ? poly.points.length : poly.points.length - 1) : 0;
@@ -301,8 +326,9 @@ function handleCanvasDown(e) {
         }
       }
     }
+    // 未完成ポリゴンのエッジコントロール
     if (currentPolygon.points.length > 0) {
-      const edgeCount = currentPolygon.points.length > 0 ? currentPolygon.points.length - 1 : 0;
+      const edgeCount = currentPolygon.points.length - 1;
       for (let i = 0; i < edgeCount; i++) {
         const cp = getEdgeControlPoint(currentPolygon, i);
         const dx = pos.x - cp.x;
@@ -316,6 +342,7 @@ function handleCanvasDown(e) {
         }
       }
     }
+    // 頂点の選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       for (let i = 0; i < poly.points.length; i++) {
@@ -343,6 +370,7 @@ function handleCanvasDown(e) {
         }
       }
     }
+    // ポリゴン内部の選択
     for (let p = 0; p < polygons.length; p++) {
       let poly = polygons[p];
       if (pointInPolygon(pos, poly.points)) {
@@ -474,8 +502,14 @@ closePolygonBtn.addEventListener("click", function() {
     }
   }
 });
-showEdgeLengthCheckbox.addEventListener("change", updateDrawing);
-showAngleCheckbox.addEventListener("change", updateDrawing);
+showEdgeLengthCheckbox.addEventListener("change", function() {
+  saveState();
+  updateDrawing();
+});
+showAngleCheckbox.addEventListener("change", function() {
+  saveState();
+  updateDrawing();
+});
 showGridCheckbox.addEventListener("change", updateDrawing);
 if(snapGridCheckbox) { snapGridCheckbox.addEventListener("change", updateDrawing); }
 
@@ -490,7 +524,6 @@ canvas.addEventListener("wheel", function(e) {
   } else {
     zoomLevel /= scaleFactor;
   }
-  // ズームの範囲を制限
   zoomLevel = Math.max(0.5, Math.min(zoomLevel, 3));
   scheduleUpdate();
 });
@@ -499,9 +532,7 @@ canvas.addEventListener("wheel", function(e) {
 // 描画関数
 // -------------------------------
 function updateDrawing() {
-  // まずキャンバスをクリア
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // 描画前にズームの変換を適用
   ctx.save();
   ctx.scale(zoomLevel, zoomLevel);
   if (showGridCheckbox.checked) {
@@ -613,7 +644,7 @@ function drawEdgeLengthBezier(p1, p2, cp) {
   ctx.lineWidth = 2;
   let gap = p1.edgeProperty.bezierGap;
   if (gap >= 1) {
-    // gapが1以上なら曲線を描画しない
+    // gapが1以上なら描画しない
   } else if (gap <= 0) {
     drawQuadraticSegment(p1, cp, p2, 0, 1);
   } else {
@@ -630,7 +661,6 @@ function drawEdgeLengthBezier(p1, p2, cp) {
   const norm = Math.sqrt(derivative.x*derivative.x + derivative.y*derivative.y);
   const normal = { x: -derivative.y/norm, y: derivative.x/norm };
   const offset = 5;
-  // 中心位置に沿ったオフセットに加え、上方向に10px移動
   const textPos = { 
     x: mid.x + normal.x * offset, 
     y: mid.y + normal.y * offset - 10 
@@ -777,7 +807,7 @@ function updatePropertyPanel() {
     polyContainer.appendChild(duplicateBtn);
   }
   
-  // 辺のプロパティ
+  // 各種プロパティの入力欄（値変更時は saveState() を呼び出す）
   const edgeHeader = document.createElement("div");
   edgeHeader.className = "subHeader";
   edgeHeader.textContent = "辺のプロパティ";
@@ -792,6 +822,7 @@ function updatePropertyPanel() {
     cb.checked = poly.points[i].edgeProperty.showEdgeLength;
     cb.addEventListener("change", function() {
       poly.points[i].edgeProperty.showEdgeLength = cb.checked;
+      saveState();
       updateDrawing();
     });
     container.appendChild(cb);
@@ -805,6 +836,7 @@ function updatePropertyPanel() {
     segmentColorInput.value = poly.points[i].edgeProperty.segmentColor;
     segmentColorInput.addEventListener("input", function() {
       poly.points[i].edgeProperty.segmentColor = segmentColorInput.value;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" 線分色: "));
@@ -816,6 +848,7 @@ function updatePropertyPanel() {
     bezierColorInput.value = poly.points[i].edgeProperty.bezierColor;
     bezierColorInput.addEventListener("input", function() {
       poly.points[i].edgeProperty.bezierColor = bezierColorInput.value;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" ベジェ色: "));
@@ -827,6 +860,7 @@ function updatePropertyPanel() {
     labelColorInput.value = poly.points[i].edgeProperty.labelColor;
     labelColorInput.addEventListener("input", function() {
       poly.points[i].edgeProperty.labelColor = labelColorInput.value;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" ラベル色: "));
@@ -839,14 +873,16 @@ function updatePropertyPanel() {
     textInput.value = poly.points[i].edgeProperty.labelOverride || "";
     textInput.addEventListener("change", function() {
       poly.points[i].edgeProperty.labelOverride = textInput.value;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" 表示ラベル: "));
     container.appendChild(textInput);
     
-    // 追加：ベジェ曲線切れ目スライダーを createLabelRange を使用して生成
+    // ベジェ曲線切れ目スライダー
     const gapRangeElem = createLabelRange("ベジェ切れ目", poly.points[i].edgeProperty.bezierGap, 0, 1, 0.05, (ev) => {
       poly.points[i].edgeProperty.bezierGap = parseFloat(ev.target.value);
+      saveState();
       updateDrawing();
     });
     container.appendChild(gapRangeElem);
@@ -873,6 +909,7 @@ function updatePropertyPanel() {
     angleCb.checked = poly.points[i].angleProperty.showAngle;
     angleCb.addEventListener("change", function() {
       poly.points[i].angleProperty.showAngle = angleCb.checked;
+      saveState();
       updateDrawing();
     });
     container.appendChild(angleCb);
@@ -889,6 +926,7 @@ function updatePropertyPanel() {
     radiusSlider.addEventListener("input", function() {
       poly.points[i].angleProperty.radius = parseFloat(radiusSlider.value);
       radiusSpan.textContent = radiusSlider.value;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" 半径: "));
@@ -899,6 +937,7 @@ function updatePropertyPanel() {
     fanCheckbox.checked = (poly.points[i].angleProperty.fanPosition === 1);
     fanCheckbox.addEventListener("change", function() {
       poly.points[i].angleProperty.fanPosition = fanCheckbox.checked ? 1 : 0;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" 外側扇形: "));
@@ -909,6 +948,7 @@ function updatePropertyPanel() {
     angleTextInput.value = poly.points[i].angleProperty.labelOverride || "";
     angleTextInput.addEventListener("change", function() {
       poly.points[i].angleProperty.labelOverride = angleTextInput.value;
+      saveState();
       updateDrawing();
     });
     container.appendChild(document.createTextNode(" 表示ラベル: "));
