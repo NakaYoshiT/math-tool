@@ -11,7 +11,9 @@
     【描画モード】では、Canvas 上をクリック／タッチして頂点を追加し、【ポリゴンを閉じる】で多角形を完成させます。<br>
     複数の多角形を順次作成できます。<br>
     【編集モード】では、作成済みの多角形がすべて表示され、クリックまたはドラッグで対象の多角形を選択すると、その多角形のプロパティが右側のパネルに表示されます。<br>
-    ※選択された多角形だけが移動や個別編集の対象となります。
+    ※選択された多角形だけが移動や個別編集の対象となります。<br>
+    <strong>グループ化：</strong>編集モード時に複数オブジェクト（ポリゴンやテキスト）を[Shift + クリック]で選択し、「グループ化」を押すと、一括移動できます。<br>
+    「グループ解除」を押すとグループが解除され、再び個別に移動できます。
   </p>
 <div class="modeSelect">
   <label>
@@ -37,12 +39,10 @@
       <input type="checkbox" id="showAngle" checked>
       全体 角表示
     </label>
-    <!-- 既存のグリッド表示チェックボックス -->
     <label>
       <input type="checkbox" id="showGrid" checked>
       グリッド表示
     </label>
-    <!-- 新規追加：グリッドスナップチェックボックス -->
     <label>
       <input type="checkbox" id="snapGrid">
       グリッドスナップ
@@ -51,6 +51,10 @@
     <button id="clearBtn">クリア</button>
     <button id="undoBtn">Undo</button>
     <button id="redoBtn">Redo</button>
+
+    <!-- ★ 追加: グループ化・グループ解除ボタン -->
+    <button id="groupBtn">グループ化</button>
+    <button id="ungroupBtn">グループ解除</button>
   </div>
   <div class="container">
     <canvas id="drawingArea" width="800" height="600"></canvas>
